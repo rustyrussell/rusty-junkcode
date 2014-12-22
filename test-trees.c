@@ -130,14 +130,15 @@ struct style styles[] = {
 	{ "maaku", maaku_proof_len }
 };
 
-static void print_proof_lengths(size_t num, struct isaac64_ctx *isaac)
+static void print_proof_lengths(size_t num, size_t target,
+				struct isaac64_ctx *isaac)
 {
 	int *dist, *step;
 	size_t i, s, plen;
 
 	dist = calloc(sizeof(*dist), num);
 	step = calloc(sizeof(*step), num);
-	for (i = 1; i < num; i++) {
+	for (i = target+1; i < num; i++) {
 		/* We can skip more if we're better than required. */
 		uint64_t skip = -1ULL / isaac64_next_uint64(isaac);
 		int j, best;
@@ -155,13 +156,13 @@ static void print_proof_lengths(size_t num, struct isaac64_ctx *isaac)
 
 #if 0
 	printf("CPV path (len %u):\n", dist[num-1]);
-	for (i = num-1; i; i = step[i])
+	for (i = num-1; i != target; i = step[i])
 		printf("-> %u (-%zu)\n", step[i], i - step[i]);
 #endif
 
 	for (s = 0; s < ARRAY_SIZE(styles); s++) {
 		plen = 0;
-		for (i = num-1; i; i = step[i])
+		for (i = num-1; i != target; i = step[i])
 			plen += styles[s].proof_len(i, step[i]);
 		printf("%s: proof hashes %zu\n", styles[s].name, plen);
 	}
@@ -172,16 +173,21 @@ static void print_proof_lengths(size_t num, struct isaac64_ctx *isaac)
 
 int main(int argc, char *argv[])
 {
-	size_t num, seed;
+	size_t num, seed = 0, target = 0;
 	struct isaac64_ctx isaac;
 
-	if (argc != 2 && argc != 3)
-		errx(1, "Usage: %s <num> [seed]", argv[0]);
+	if (argc < 2 || argc > 4)
+		errx(1, "Usage: %s <num> [<target>] [seed]", argv[0]);
 
 	num = atoi(argv[1]);
-	seed = atoi(argv[2] ? argv[2] : "0");
+	if (argc > 2)
+		target = atoi(argv[2]);
+	if (target >= num)
+		errx(1, "Don't do that, you'll crash me");
+	if (argc > 3)
+		seed = atoi(argv[3]);
 	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
-	print_proof_lengths(num, &isaac);
+	print_proof_lengths(num, target, &isaac);
 
 	return 0;
 }
