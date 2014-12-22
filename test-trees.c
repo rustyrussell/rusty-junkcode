@@ -89,7 +89,7 @@ static void build_array_tree(struct maaku_node *n, size_t start, size_t end)
 	build_array_tree(n->child[1], start + len, end);
 }
 
-static size_t array_proof_len(size_t from, size_t to)
+static size_t old_array_proof_len(size_t from, size_t to)
 {
 	const struct maaku_node *n;
 	size_t depth;
@@ -104,6 +104,29 @@ static size_t array_proof_len(size_t from, size_t to)
 
 	/* With an external value, proof length == depth */
 	return depth;
+}
+
+static size_t do_proof_len(size_t to, size_t start, size_t end)
+{
+	size_t len;
+
+	/* last node? */
+	if (end - start <= 2) {
+		assert(to >= start && to < end);
+		return 1;
+	}
+
+	len = (1 << (ilog32(end - start - 1) - 1));
+	if (to < start + len)
+		return 1 + do_proof_len(to, start, start + len);
+	return 1 + do_proof_len(to, start + len, end);
+}
+
+static size_t array_proof_len(size_t from, size_t to)
+{
+	size_t len = do_proof_len(to, 0, from);
+	assert(len == old_array_proof_len(from, to));
+	return len;
 }
 
 static size_t maaku_proof_len(size_t from, size_t to)
