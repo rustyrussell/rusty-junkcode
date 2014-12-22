@@ -59,53 +59,6 @@ static size_t optimal_proof_len(size_t from, size_t to)
  *    /\    /\  \
  *   0  1  2  3  4
  */
-/* We abuse maaku_node here, for using find_maaku_node */
-static struct maaku_node *new_array_node(size_t val, size_t depth)
-{
-	struct maaku_node *n = malloc(sizeof(*n));
-	n->value = val;
-	n->depth = depth;
-	n->child[0] = n->child[1] = NULL;
-	return n;
-}
-
-static void build_array_tree(struct maaku_node *n, size_t start, size_t end)
-{
-	size_t len;
-
-	if (end - start == 1) {
-		n->child[0] = new_array_node(start, n->depth+1);
-		return;
-	}
-	if (end - start == 2) {
-		n->child[0] = new_array_node(start, n->depth+1);
-		n->child[1] = new_array_node(start+1, n->depth+1);
-		return;
-	}
-	n->child[0] = new_array_node(-1, n->depth+1);
-	len = (1 << (ilog32(end - start - 1) - 1));
-	build_array_tree(n->child[0], start, start + len);
-	n->child[1] = new_array_node(-1, n->depth+1);
-	build_array_tree(n->child[1], start + len, end);
-}
-
-static size_t old_array_proof_len(size_t from, size_t to)
-{
-	const struct maaku_node *n;
-	size_t depth;
-	struct maaku_tree t;
-
-	t.root = new_array_node(-1, 0);
-	build_array_tree(t.root, 0, from);
-	n = find_maaku_node(t.root, to);
-
-	depth = n->depth;
-	free_maaku_tree(&t);
-
-	/* With an external value, proof length == depth */
-	return depth;
-}
-
 static size_t do_proof_len(size_t to, size_t start, size_t end)
 {
 	size_t len;
@@ -124,9 +77,7 @@ static size_t do_proof_len(size_t to, size_t start, size_t end)
 
 static size_t array_proof_len(size_t from, size_t to)
 {
-	size_t len = do_proof_len(to, 0, from);
-	assert(len == old_array_proof_len(from, to));
-	return len;
+	return do_proof_len(to, 0, from);
 }
 
 static size_t maaku_proof_len(size_t from, size_t to)
@@ -214,11 +165,11 @@ struct style {
 };
 
 struct style styles[] = {
-	{ "array", false, array_proof_len },
+	{ "array", true, array_proof_len },
 	{ "optimal", true, optimal_proof_len },
 	{ "maaku", false, maaku_proof_len },
 	{ "breadth-batch", true, breadth_batch_proof_len },
-	{ "array-batch", false, array_batch_proof_len }
+	{ "array-batch", true, array_batch_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
