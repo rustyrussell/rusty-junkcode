@@ -122,6 +122,68 @@ static size_t maaku_proof_len(size_t from, size_t to)
 	return prooflen_for_internal_node(depth);
 }
 
+/*
+ * Slightly less optimal, but incrementable, is to have a series of
+ * breadth-first trees, in batches of N.
+ *
+ * eg. 
+ *              /\
+ *             /  \
+ *            /    \
+ *           /\    optimal tree for 196605... (under construction)
+ *          /  \
+ *         /    \
+ *        /\  131070-196604
+ *       /  \
+ *      /    \
+ *  0-65534 65535-131069
+ *
+ * There's also a variant where we simply back onto an array-style tree.
+ */
+#define SUBTREE_SIZE 65535
+
+static size_t batch_proof_len(size_t from, size_t to, bool array)
+{
+	size_t from_tree, to_tree, tree_depth;
+
+	from_tree = from / SUBTREE_SIZE;
+	to_tree = to / SUBTREE_SIZE;
+
+	if (from_tree == to_tree) {
+		/* It's in the tree we're building.  This falls back to the
+		 * optimal case if we only have one subtree so far */
+		if (from < SUBTREE_SIZE)
+			return optimal_proof_len(from, to);
+		return 1 + optimal_proof_len(from, to);
+	}
+
+	if (array)
+		/* Use array for old entries. */
+		return 1 + array_proof_len(from_tree * SUBTREE_SIZE, to);
+
+	/* It's in an older tree.  One to get to the old trees, and
+	 * one extra branch for every tree we go back. */
+	tree_depth = 1 + from_tree - to_tree;
+
+	/* First tree is just on the left branch, so subtract one. */
+	if (to_tree == 0)
+		tree_depth--;
+
+	/* One hash to get to get down the tree, plus proof inside the
+	 * tree. */
+	return tree_depth + optimal_proof_len(SUBTREE_SIZE, to%SUBTREE_SIZE);
+}
+
+static size_t breadth_batch_proof_len(size_t from, size_t to)
+{
+	return batch_proof_len(from, to, false);
+}
+
+static size_t array_batch_proof_len(size_t from, size_t to)
+{
+	return batch_proof_len(from, to, true);
+}
+
 struct style {
 	const char *name;
 	size_t (*proof_len)(size_t, size_t);
@@ -130,7 +192,9 @@ struct style {
 struct style styles[] = {
 	{ "array", array_proof_len },
 	{ "optimal", optimal_proof_len },
-	{ "maaku", maaku_proof_len }
+	{ "maaku", maaku_proof_len },
+	{ "breadth-batch", breadth_batch_proof_len },
+	{ "array-batch", array_batch_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target,
