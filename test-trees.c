@@ -186,15 +186,16 @@ static size_t array_batch_proof_len(size_t from, size_t to)
 
 struct style {
 	const char *name;
+	bool fast; /* Fast to calculate depth. */
 	size_t (*proof_len)(size_t, size_t);
 };
 
 struct style styles[] = {
-	{ "array", array_proof_len },
-	{ "optimal", optimal_proof_len },
-	{ "maaku", maaku_proof_len },
-	{ "breadth-batch", breadth_batch_proof_len },
-	{ "array-batch", array_batch_proof_len }
+	{ "array", false, array_proof_len },
+	{ "optimal", true, optimal_proof_len },
+	{ "maaku", false, maaku_proof_len },
+	{ "breadth-batch", true, breadth_batch_proof_len },
+	{ "array-batch", false, array_batch_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
@@ -242,41 +243,51 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 	free(step);
 }
 
+/* Calculate the optimal proof lengths for all variants at once. */
+struct prooflen {
+	unsigned int len[ARRAY_SIZE(styles)];
+};
+
 /* This sorts by actual (optimal) proof len, not path len  */
 static void print_optimal_length(size_t num, size_t target, size_t seed)
 {
-	int *dist, *step;
-	size_t i;
+	struct prooflen *prooflen;
+	size_t i, s;
 	struct isaac64_ctx isaac;
 
 	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
 
-	dist = calloc(sizeof(*dist), num);
-	step = calloc(sizeof(*step), num);
+	prooflen = calloc(sizeof(*prooflen), num);
 	for (i = target+1; i < num; i++) {
 		/* We can skip more if we're better than required. */
 		uint64_t skip = -1ULL / isaac64_next_uint64(&isaac);
-		int j, best, best_dist;
+		int j;
 
 		if (skip > i)
 			skip = i;
 
-		best = i-1;
-		best_dist = -1;
-		for (j = i-1; j >= (int)(i-skip); j--) {
-			size_t len = optimal_proof_len(i, j);
-			if (len + dist[j] < best_dist) {
-				best = j;
-				best_dist = len + dist[j];
+		for (s = 0; s < ARRAY_SIZE(styles); s++) {
+			if (!styles[s].fast)
+				continue;
+
+			prooflen[i].len[s] = -1;
+			for (j = i-1; j >= (int)(i-skip); j--) {
+				size_t len = styles[s].proof_len(i, j);
+				if (len + prooflen[j].len[s]
+				    < prooflen[i].len[s])
+					prooflen[i].len[s]
+						= len + prooflen[j].len[s];
 			}
 		}
-		dist[i] = best_dist;
-		step[i] = best;
 	}
 
-	printf("prooflen-optimal: proof hashes %u\n", dist[num-1]);
-	free(dist);
-	free(step);
+	for (s = 0; s < ARRAY_SIZE(styles); s++) {
+		if (!styles[s].fast)
+			continue;
+		printf("prooflen-%s: proof hashes %u\n", styles[s].name,
+		       prooflen[num-1].len[s]);
+	}
+	free(prooflen);
 }
 
 int main(int argc, char *argv[])
