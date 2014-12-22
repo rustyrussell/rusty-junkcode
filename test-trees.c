@@ -197,17 +197,19 @@ struct style styles[] = {
 	{ "array-batch", array_batch_proof_len }
 };
 
-static void print_proof_lengths(size_t num, size_t target,
-				struct isaac64_ctx *isaac)
+static void print_proof_lengths(size_t num, size_t target, size_t seed)
 {
 	int *dist, *step;
 	size_t i, s, plen;
+	struct isaac64_ctx isaac;
+
+	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
 
 	dist = calloc(sizeof(*dist), num);
 	step = calloc(sizeof(*step), num);
 	for (i = target+1; i < num; i++) {
 		/* We can skip more if we're better than required. */
-		uint64_t skip = -1ULL / isaac64_next_uint64(isaac);
+		uint64_t skip = -1ULL / isaac64_next_uint64(&isaac);
 		int j, best;
 
 		if (skip > i)
@@ -240,11 +242,47 @@ static void print_proof_lengths(size_t num, size_t target,
 	free(step);
 }
 
+/* This sorts by actual (optimal) proof len, not path len  */
+static void print_optimal_length(size_t num, size_t target, size_t seed)
+{
+	int *dist, *step;
+	size_t i;
+	struct isaac64_ctx isaac;
+
+	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
+
+	dist = calloc(sizeof(*dist), num);
+	step = calloc(sizeof(*step), num);
+	for (i = target+1; i < num; i++) {
+		/* We can skip more if we're better than required. */
+		uint64_t skip = -1ULL / isaac64_next_uint64(&isaac);
+		int j, best, best_dist;
+
+		if (skip > i)
+			skip = i;
+
+		best = i-1;
+		best_dist = -1;
+		for (j = i-1; j >= (int)(i-skip); j--) {
+			size_t len = optimal_proof_len(i, j);
+			if (len + dist[j] < best_dist) {
+				best = j;
+				best_dist = len + dist[j];
+			}
+		}
+		dist[i] = best_dist;
+		step[i] = best;
+	}
+
+	printf("prooflen-optimal: proof hashes %u\n", dist[num-1]);
+	free(dist);
+	free(step);
+}
+
 int main(int argc, char *argv[])
 {
 	unsigned int num, seed = 0, target = 0;
 	bool maaku = true;
-	struct isaac64_ctx isaac;
 
 	opt_register_noarg("--usage|--help|-h", opt_usage_and_exit,
 			   "<num>\n"
@@ -270,8 +308,8 @@ int main(int argc, char *argv[])
 	num = atoi(argv[1]);
 	if (target >= num)
 		errx(1, "Don't do that, you'll crash me");
-	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
-	print_proof_lengths(num, target, &isaac);
+	print_proof_lengths(num, target, seed);
+	print_optimal_length(num, target, seed);
 
 	return 0;
 }
