@@ -3,7 +3,10 @@
 #include <ccan/isaac/isaac64.h>
 #include <ccan/ilog/ilog.h>
 #include <ccan/err/err.h>
+#include <ccan/opt/opt.h>
 #include <stdio.h>
+#include <assert.h>
+#include <string.h>
 
 /* Trees with internal values look like so (from Maaku's Merkelized Prefix tree
  * BIP at https://gist.github.com/maaku/2aed2cb628024800044d ):
@@ -161,6 +164,8 @@ static void print_proof_lengths(size_t num, size_t target,
 #endif
 
 	for (s = 0; s < ARRAY_SIZE(styles); s++) {
+		if (!styles[s].name)
+			continue;
 		plen = 0;
 		for (i = num-1; i != target; i = step[i])
 			plen += styles[s].proof_len(i, step[i]);
@@ -173,19 +178,34 @@ static void print_proof_lengths(size_t num, size_t target,
 
 int main(int argc, char *argv[])
 {
-	size_t num, seed = 0, target = 0;
+	unsigned int num, seed = 0, target = 0;
+	bool maaku = true;
 	struct isaac64_ctx isaac;
 
-	if (argc < 2 || argc > 4)
-		errx(1, "Usage: %s <num> [<target>] [seed]", argv[0]);
+	opt_register_noarg("--usage|--help|-h", opt_usage_and_exit,
+			   "<num>\n"
+			   "Calculates proof length for SPV chains of block headers,\n"
+			   " using various different prevtree topologies",
+			   "Print this message");
+	opt_register_arg("--target", opt_set_uintval, opt_show_uintval, &target,
+			 "Block number to terminate SPV proof at");
+	opt_register_arg("--seed", opt_set_uintval, opt_show_uintval, &seed,
+			 "Seed for deterministic RNG");
+	opt_register_noarg("--no-maaku", opt_set_invbool,
+			   &maaku, "Skip the maaku tree");
+
+	opt_parse(&argc, argv, opt_log_stderr_exit);
+	if (argc != 2)
+		opt_usage_and_exit(NULL);
+
+	if (!maaku) {
+		assert(strcmp(styles[2].name, "maaku") == 0);
+		styles[2].name = NULL;
+	}
 
 	num = atoi(argv[1]);
-	if (argc > 2)
-		target = atoi(argv[2]);
 	if (target >= num)
 		errx(1, "Don't do that, you'll crash me");
-	if (argc > 3)
-		seed = atoi(argv[3]);
 	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
 	print_proof_lengths(num, target, &isaac);
 

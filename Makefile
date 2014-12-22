@@ -1,6 +1,6 @@
 CCANDIR:=ccan
 CFLAGS=-I$(CCANDIR) -Wall -g -O3
-CCAN_OBJS:= $(CCANDIR)/ccan/err/err.o $(CCANDIR)/ccan/isaac/isaac64.o  $(CCANDIR)/ccan/ilog/ilog.o
+CCAN_OBJS:= $(CCANDIR)/ccan/err/err.o $(CCANDIR)/ccan/isaac/isaac64.o $(CCANDIR)/ccan/ilog/ilog.o $(CCANDIR)/ccan/opt/opt.o $(CCANDIR)/ccan/opt/usage.o $(CCANDIR)/ccan/opt/parse.o $(CCANDIR)/ccan/opt/helpers.o
 OBJS:=test-trees.o maakutree.o spv.o
 
 BINS := spv test-trees
@@ -13,7 +13,7 @@ ccan/config.h: ccan/tools/configurator/configurator
 
 ccan/tools/configurator/configurator: ccan/tools/configurator/configurator.o
 
-test-trees: test-trees.o maakutree.o ccan/ccan/isaac/isaac64.o ccan/ccan/err/err.o ccan/ccan/ilog/ilog.o
+test-trees: test-trees.o maakutree.o $(CCAN_OBJS)
 
 spv: spv.o
 
