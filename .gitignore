@@ -1,0 +1,3 @@
+*.o
+*~
+ccan/config.h
