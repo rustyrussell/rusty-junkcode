@@ -25,7 +25,7 @@ static size_t prooflen_for_internal_node(size_t depth)
 }
 
 /* Ideal case would use a breadth first internal node system.  Since
- * short proofs are more common than long proofs, the ideal is a
+ * short proofs are more common than long proofs, the optimal is a
  * breadth first tree:
  *
  *             N
@@ -38,14 +38,14 @@ static size_t prooflen_for_internal_node(size_t depth)
  * Of course, generating this to verify gets worse over time.
  *
  * The depth of a node == log2(dist). */
-static size_t ideal_proof_len(size_t from, size_t to)
+static size_t optimal_proof_len(size_t from, size_t to)
 {
 	size_t depth = ilog32(from - to);
 
 	return prooflen_for_internal_node(depth);
 }
 
-/* Naive approach is just to built the tree from an array, in order,
+/* Array approach is just to built the tree from an array, in order,
  * using external nodes:
  *
  *         ^
@@ -57,7 +57,7 @@ static size_t ideal_proof_len(size_t from, size_t to)
  *   0  1  2  3  4
  */
 /* We abuse maaku_node here, for using find_maaku_node */
-static struct maaku_node *new_naive_node(size_t val, size_t depth)
+static struct maaku_node *new_array_node(size_t val, size_t depth)
 {
 	struct maaku_node *n = malloc(sizeof(*n));
 	n->value = val;
@@ -66,34 +66,34 @@ static struct maaku_node *new_naive_node(size_t val, size_t depth)
 	return n;
 }
 
-static void build_naive_tree(struct maaku_node *n, size_t start, size_t end)
+static void build_array_tree(struct maaku_node *n, size_t start, size_t end)
 {
 	size_t len;
 
 	if (end - start == 1) {
-		n->child[0] = new_naive_node(start, n->depth+1);
+		n->child[0] = new_array_node(start, n->depth+1);
 		return;
 	}
 	if (end - start == 2) {
-		n->child[0] = new_naive_node(start, n->depth+1);
-		n->child[1] = new_naive_node(start+1, n->depth+1);
+		n->child[0] = new_array_node(start, n->depth+1);
+		n->child[1] = new_array_node(start+1, n->depth+1);
 		return;
 	}
-	n->child[0] = new_naive_node(-1, n->depth+1);
+	n->child[0] = new_array_node(-1, n->depth+1);
 	len = (1 << (ilog32(end - start - 1) - 1));
-	build_naive_tree(n->child[0], start, start + len);
-	n->child[1] = new_naive_node(-1, n->depth+1);
-	build_naive_tree(n->child[1], start + len, end);
+	build_array_tree(n->child[0], start, start + len);
+	n->child[1] = new_array_node(-1, n->depth+1);
+	build_array_tree(n->child[1], start + len, end);
 }
 
-static size_t naive_proof_len(size_t from, size_t to)
+static size_t array_proof_len(size_t from, size_t to)
 {
 	const struct maaku_node *n;
 	size_t depth;
 	struct maaku_tree t;
 
-	t.root = new_naive_node(-1, 0);
-	build_naive_tree(t.root, 0, from);
+	t.root = new_array_node(-1, 0);
+	build_array_tree(t.root, 0, from);
 	n = find_maaku_node(t.root, to);
 
 	depth = n->depth;
@@ -125,8 +125,8 @@ struct style {
 };
 
 struct style styles[] = {
-	{ "naive", naive_proof_len },
-	{ "ideal", ideal_proof_len },
+	{ "array", array_proof_len },
+	{ "optimal", optimal_proof_len },
 	{ "maaku", maaku_proof_len }
 };
 
