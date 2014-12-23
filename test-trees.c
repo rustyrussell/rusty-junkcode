@@ -158,6 +158,25 @@ static size_t array_batch_proof_len(size_t from, size_t to)
 	return batch_proof_len(from, to, true);
 }
 
+static size_t mmr_proof_len(size_t from, size_t to)
+{
+	size_t mtns = __builtin_popcount(from);
+	size_t peak = 0, summit = 0;
+	int i;
+
+	for (i = sizeof(size_t)*8-1; i >= 0; --i)
+	{
+		summit = 1<<i;
+		if (from & summit)
+		{
+			if (to & summit) ++peak;
+			else             break;
+		}
+	}
+
+	return array_proof_len(mtns, peak) + ilog32(summit);
+}
+
 struct style {
 	const char *name;
 	bool fast; /* Fast to calculate depth. */
@@ -169,7 +188,8 @@ struct style styles[] = {
 	{ "optimal", true, optimal_proof_len },
 	{ "maaku", false, maaku_proof_len },
 	{ "breadth-batch", true, breadth_batch_proof_len },
-	{ "array-batch", true, array_batch_proof_len }
+	{ "array-batch", true, array_batch_proof_len },
+	{ "mmr", true, mmr_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
