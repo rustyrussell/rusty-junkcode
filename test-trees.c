@@ -264,6 +264,51 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 	free(prooflen);
 }
 
+/* From bitcoin.cpp: */
+/** Turn the lowest '1' bit in the binary representation of a number into a '0'. */
+int static inline InvertLowestOne(int n) { return n & (n - 1); }
+
+int static inline GetSkipHeight(int height) {
+	if (height < 2)
+		return 0;
+// Determine which height to jump back to. Any number strictly lower than height is acceptable,
+// but the following expression seems to perform well in simulations (max 110 steps to go back
+// up to 2**18 blocks).
+	return (height & 1) ? InvertLowestOne(InvertLowestOne(height - 1)) + 1 : InvertLowestOne(height);
+}
+
+/* This is sipa's "single backlink" version. */
+static void print_singleback_length(size_t num, size_t target, size_t seed)
+{
+	int *prooflen;
+	size_t i;
+	struct isaac64_ctx isaac, isaac2;
+
+	/* We use the same rng as the other cases, for comparability. */
+	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
+	isaac64_init(&isaac2, (void *)&seed, sizeof(seed));
+
+	prooflen = calloc(sizeof(*prooflen), num);
+
+	for (i = target+1; i < num; i++) {
+		int backjump;
+
+		backjump = i - GetSkipHeight(i);
+
+		/* By default, we need one more hash than last. */
+		prooflen[i] = 1 + prooflen[i-1];
+
+		/* We can skip more if we're better than required. */
+		if (-1ULL / isaac64_next_uint64(&isaac) >= backjump) {
+			if (1 + prooflen[i - backjump] < 1 + prooflen[i-1])
+				prooflen[i] = 1 + prooflen[i - backjump];
+		}
+	}
+
+	printf("backsingle: proof hashes %u\n", prooflen[num-1]);
+	free(prooflen);
+}
+
 int main(int argc, char *argv[])
 {
 	unsigned int num, seed = 0, target = 0;
@@ -295,6 +340,7 @@ int main(int argc, char *argv[])
 		errx(1, "Don't do that, you'll crash me");
 	print_proof_lengths(num, target, seed);
 	print_optimal_length(num, target, seed);
+	print_singleback_length(num, target, seed);
 
 	return 0;
 }
