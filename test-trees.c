@@ -264,48 +264,70 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 	free(prooflen);
 }
 
-/* From bitcoin.cpp: */
-/** Turn the lowest '1' bit in the binary representation of a number into a '0'. */
-int static inline InvertLowestOne(int n) { return n & (n - 1); }
+struct linkback_strategy {
+	const char *name;
+	int (*backlen)(size_t i, const struct prooflen *prooflen);
+};
 
-int static inline GetSkipHeight(int height) {
-	if (height < 2)
-		return 0;
-// Determine which height to jump back to. Any number strictly lower than height is acceptable,
-// but the following expression seems to perform well in simulations (max 110 steps to go back
-// up to 2**18 blocks).
-	return (height & 1) ? InvertLowestOne(InvertLowestOne(height - 1)) + 1 : InvertLowestOne(height);
+static int backlen_to_genesis(size_t i, const struct prooflen *prooflen)
+{
+	return i;
 }
 
-/* This is sipa's "single backlink" version. */
+static int backlen_to_halfway(size_t i, const struct prooflen *prooflen)
+{
+	return i / 2;
+}
+
+static int backlen_to_random(size_t i, const struct prooflen *prooflen)
+{
+	static struct isaac64_ctx isaac;
+	static bool initted;
+
+	if (!initted) {
+		isaac64_init(&isaac, NULL, 0);
+		initted = true;
+	}
+	return isaac64_next_uint(&isaac, i);
+}
+
+static struct linkback_strategy strategy[] = {
+	{ "genesis", backlen_to_genesis },
+	{ "halfway", backlen_to_halfway },
+	{ "random", backlen_to_random },
+};
+
+/* Try a single link. */
 static void print_singleback_length(size_t num, size_t target, size_t seed)
 {
-	int *prooflen;
-	size_t i;
-	struct isaac64_ctx isaac, isaac2;
+	struct prooflen *prooflen;
+	size_t i, s;
+	struct isaac64_ctx isaac;
 
 	/* We use the same rng as the other cases, for comparability. */
 	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
-	isaac64_init(&isaac2, (void *)&seed, sizeof(seed));
 
 	prooflen = calloc(sizeof(*prooflen), num);
-
 	for (i = target+1; i < num; i++) {
-		int backjump;
+		for (s = 0; s < ARRAY_SIZE(strategy); s++) {
+			int backjump = strategy[s].backlen(i, prooflen);
 
-		backjump = i - GetSkipHeight(i);
+			/* Default is just back one. */
+			prooflen[i].len[s] = 1 + prooflen[i-1].len[s];
 
-		/* By default, we need one more hash than last. */
-		prooflen[i] = 1 + prooflen[i-1];
-
-		/* We can skip more if we're better than required. */
-		if (-1ULL / isaac64_next_uint64(&isaac) >= backjump) {
-			if (1 + prooflen[i - backjump] < 1 + prooflen[i-1])
-				prooflen[i] = 1 + prooflen[i - backjump];
+			/* We can skip more if we're better than required. */
+			if (-1ULL / isaac64_next_uint64(&isaac) >= backjump) {
+				if (1 + prooflen[i - backjump].len[s]
+				    < 1 + prooflen[i-1].len[s])
+				prooflen[i].len[s] =
+					1 + prooflen[i - backjump].len[s];
+			}
 		}
 	}
 
-	printf("backsingle: proof hashes %u\n", prooflen[num-1]);
+	for (s = 0; s < ARRAY_SIZE(strategy); s++)
+		printf("back-%s: proof hashes %u\n",
+		       strategy[s].name, prooflen[num-1].len[s]);
 	free(prooflen);
 }
 
