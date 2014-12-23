@@ -264,73 +264,6 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 	free(prooflen);
 }
 
-struct linkback_strategy {
-	const char *name;
-	int (*backlen)(size_t i, const struct prooflen *prooflen);
-};
-
-static int backlen_to_genesis(size_t i, const struct prooflen *prooflen)
-{
-	return i;
-}
-
-static int backlen_to_halfway(size_t i, const struct prooflen *prooflen)
-{
-	return i / 2;
-}
-
-static int backlen_to_random(size_t i, const struct prooflen *prooflen)
-{
-	static struct isaac64_ctx isaac;
-	static bool initted;
-
-	if (!initted) {
-		isaac64_init(&isaac, NULL, 0);
-		initted = true;
-	}
-	return isaac64_next_uint(&isaac, i);
-}
-
-static struct linkback_strategy strategy[] = {
-	{ "genesis", backlen_to_genesis },
-	{ "halfway", backlen_to_halfway },
-	{ "random", backlen_to_random },
-};
-
-/* Try a single link. */
-static void print_singleback_length(size_t num, size_t target, size_t seed)
-{
-	struct prooflen *prooflen;
-	size_t i, s;
-	struct isaac64_ctx isaac;
-
-	/* We use the same rng as the other cases, for comparability. */
-	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
-
-	prooflen = calloc(sizeof(*prooflen), num);
-	for (i = target+1; i < num; i++) {
-		for (s = 0; s < ARRAY_SIZE(strategy); s++) {
-			int backjump = strategy[s].backlen(i, prooflen);
-
-			/* Default is just back one. */
-			prooflen[i].len[s] = 1 + prooflen[i-1].len[s];
-
-			/* We can skip more if we're better than required. */
-			if (-1ULL / isaac64_next_uint64(&isaac) >= backjump) {
-				if (1 + prooflen[i - backjump].len[s]
-				    < 1 + prooflen[i-1].len[s])
-				prooflen[i].len[s] =
-					1 + prooflen[i - backjump].len[s];
-			}
-		}
-	}
-
-	for (s = 0; s < ARRAY_SIZE(strategy); s++)
-		printf("back-%s: proof hashes %u\n",
-		       strategy[s].name, prooflen[num-1].len[s]);
-	free(prooflen);
-}
-
 int main(int argc, char *argv[])
 {
 	unsigned int num, seed = 0, target = 0;
@@ -362,7 +295,6 @@ int main(int argc, char *argv[])
 		errx(1, "Don't do that, you'll crash me");
 	print_proof_lengths(num, target, seed);
 	print_optimal_length(num, target, seed);
-	print_singleback_length(num, target, seed);
 
 	return 0;
 }
