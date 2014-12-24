@@ -8,6 +8,13 @@
 #include <assert.h>
 #include <string.h>
 
+/* We keep a cache of luckiest. */
+#define CACHE_SIZE 64
+struct cache {
+	int blocknum;
+	int skip;
+};
+
 /* Trees with internal values look like so (from Maaku's Merkelized Prefix tree
  * BIP at https://gist.github.com/maaku/2aed2cb628024800044d ):
  *
@@ -41,7 +48,7 @@ static size_t prooflen_for_internal_node(size_t depth)
  * Of course, generating this to verify gets worse over time.
  *
  * The depth of a node == log2(dist). */
-static size_t optimal_proof_len(size_t from, size_t to)
+static size_t optimal_proof_len(size_t from, size_t to, const struct cache *c)
 {
 	size_t depth = ilog32(from - to);
 
@@ -75,12 +82,12 @@ static size_t do_proof_len(size_t to, size_t start, size_t end)
 	return 1 + do_proof_len(to, start + len, end);
 }
 
-static size_t rfc6962_proof_len(size_t from, size_t to)
+static size_t rfc6962_proof_len(size_t from, size_t to, const struct cache *c)
 {
 	return do_proof_len(to, 0, from);
 }
 
-static size_t maaku_proof_len(size_t from, size_t to)
+static size_t maaku_proof_len(size_t from, size_t to, const struct cache *c)
 {
 	struct maaku_tree t;
 	size_t i, depth;
@@ -127,13 +134,13 @@ static size_t batch_proof_len(size_t from, size_t to, bool array)
 		/* It's in the tree we're building.  This falls back to the
 		 * optimal case if we only have one subtree so far */
 		if (from < SUBTREE_SIZE)
-			return optimal_proof_len(from, to);
-		return 1 + optimal_proof_len(from, to);
+			return optimal_proof_len(from, to, NULL);
+		return 1 + optimal_proof_len(from, to, NULL);
 	}
 
 	if (array)
 		/* Use rfc6862 for old entries. */
-		return 1 + rfc6962_proof_len(from_tree * SUBTREE_SIZE, to);
+		return 1 + rfc6962_proof_len(from_tree * SUBTREE_SIZE, to, NULL);
 
 	/* It's in an older tree.  One to get to the old trees, and
 	 * one extra branch for every tree we go back. */
@@ -145,15 +152,15 @@ static size_t batch_proof_len(size_t from, size_t to, bool array)
 
 	/* One hash to get to get down the tree, plus proof inside the
 	 * tree. */
-	return tree_depth + optimal_proof_len(SUBTREE_SIZE, to%SUBTREE_SIZE);
+	return tree_depth + optimal_proof_len(SUBTREE_SIZE, to%SUBTREE_SIZE, NULL);
 }
 
-static size_t breadth_batch_proof_len(size_t from, size_t to)
+static size_t breadth_batch_proof_len(size_t from, size_t to, const struct cache *c)
 {
 	return batch_proof_len(from, to, false);
 }
 
-static size_t rfc6962_batch_proof_len(size_t from, size_t to)
+static size_t rfc6962_batch_proof_len(size_t from, size_t to, const struct cache *c)
 {
 	return batch_proof_len(from, to, true);
 }
@@ -219,23 +226,96 @@ static size_t mmr_variant_proof_len(size_t from, size_t to, bool linear)
 		else
 			return mtns - peaknum + i;
 	} else
-		return rfc6962_proof_len(mtns, peaknum) + i;
+		return rfc6962_proof_len(mtns, peaknum, NULL) + i;
 }
 
-static size_t mmr_proof_len(size_t from, size_t to)
+static size_t mmr_proof_len(size_t from, size_t to, const struct cache *c)
 {
 	return mmr_variant_proof_len(from, to, false);
 }
 
-static size_t mmr_linear_proof_len(size_t from, size_t to)
+static size_t mmr_linear_proof_len(size_t from, size_t to, const struct cache *c)
 {
 	return mmr_variant_proof_len(from, to, true);
+}
+
+static void init_cache(struct cache *cache)
+{
+	int i;
+
+	for (i = 0; i < CACHE_SIZE; i++)
+		cache[i].skip = cache[i].blocknum = 0;
+}
+
+static void add_to_cache(struct cache *cache,
+			 int skip, int blocknum)
+{
+	int i;
+
+	if (skip <= cache[CACHE_SIZE-1].skip)
+		return;
+
+	for (i = 0; cache[i].skip >= skip; i++)
+		assert(i < CACHE_SIZE);
+
+	memmove(cache + i + 1, cache + i, sizeof(*cache) * (CACHE_SIZE - i - 1));
+	cache[i].skip = skip;
+	cache[i].blocknum = blocknum;
+}
+	
+
+/*
+ * This simulates a "cache" of the luckiest blocks, ie:
+ *
+ *           /\
+ *          /  \
+ *   [ cache]  [ mmr tree ]
+ *
+ * The cache duplicates blocks in the normal mmr tree.
+ */
+static size_t mmr_cache_proof_len(size_t from, size_t to, const struct cache *c,
+				  size_t cachesize)
+{
+	int i;
+
+	assert(cachesize <= CACHE_SIZE);
+
+	/* Don't use cache for v. early blocks. */
+	if (from < cachesize * 2)
+		return mmr_proof_len(from, to, c);
+
+	/* If it's in the cache, use that. */
+	for (i = 0; i < cachesize; i++) {
+		if (c[i].blocknum == to) {
+			return 1 + ilog32(cachesize);
+		}
+	}
+
+	return 1 + mmr_proof_len(from, to, c);
+}
+
+static size_t mmr_cache64_proof_len(size_t from, size_t to,
+				    const struct cache *c)
+{
+	return mmr_cache_proof_len(from, to, c, 64);
+}
+
+static size_t mmr_cache32_proof_len(size_t from, size_t to,
+				    const struct cache *c)
+{
+	return mmr_cache_proof_len(from, to, c, 32);
+}
+
+static size_t mmr_cache16_proof_len(size_t from, size_t to,
+				    const struct cache *c)
+{
+	return mmr_cache_proof_len(from, to, c, 16);
 }
 
 struct style {
 	const char *name;
 	bool fast; /* Fast to calculate depth. */
-	size_t (*proof_len)(size_t, size_t);
+	size_t (*proof_len)(size_t, size_t, const struct cache *);
 };
 
 struct style styles[] = {
@@ -245,14 +325,16 @@ struct style styles[] = {
 	{ "breadth-batch", true, breadth_batch_proof_len },
 	{ "rfc6962-batch", true, rfc6962_batch_proof_len },
 	{ "mmr", true, mmr_proof_len },
-	{ "mmr-linear", true, mmr_linear_proof_len }
+	{ "mmr-linear", true, mmr_linear_proof_len },
+	{ "mmr-cache-sixtyfour", true, mmr_cache64_proof_len },
+	{ "mmr-cache-thirtytwo", true, mmr_cache32_proof_len },
+	{ "mmr-cache-sixteen", true, mmr_cache16_proof_len }
 };
-
-#define CACHE_SIZE 32
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
 {
 	int *dist, *step;
+	struct cache cache[CACHE_SIZE];
 	size_t i, s, plen;
 	struct isaac64_ctx isaac;
 
@@ -260,6 +342,7 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 
 	dist = calloc(sizeof(*dist), num);
 	step = calloc(sizeof(*step), num);
+	init_cache(cache);
 	for (i = target+1; i < num; i++) {
 		/* We can skip more if we're better than required. */
 		uint64_t skip = -1ULL / isaac64_next_uint64(&isaac);
@@ -267,6 +350,7 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 
 		if (skip > i)
 			skip = i;
+		add_to_cache(cache, skip, i);
 
 		best = i-1;
 		for (j = i-1; j >= (int)(i-skip); j--)
@@ -287,7 +371,7 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 			continue;
 		plen = 0;
 		for (i = num-1; i != target; i = step[i])
-			plen += styles[s].proof_len(i, step[i]);
+			plen += styles[s].proof_len(i, step[i], cache);
 		printf("%s: proof hashes %zu\n", styles[s].name, plen);
 	}
 
@@ -304,12 +388,15 @@ struct prooflen {
 static void print_optimal_length(size_t num, size_t target, size_t seed)
 {
 	struct prooflen *prooflen;
+	struct cache cache[CACHE_SIZE];
 	size_t i, s;
 	struct isaac64_ctx isaac;
 
 	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
 
 	prooflen = calloc(sizeof(*prooflen), num);
+	init_cache(cache);
+
 	for (i = target+1; i < num; i++) {
 		/* We can skip more if we're better than required. */
 		uint64_t skip = -1ULL / isaac64_next_uint64(&isaac);
@@ -317,6 +404,7 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 
 		if (skip > i)
 			skip = i;
+		add_to_cache(cache, skip, i);
 
 		for (s = 0; s < ARRAY_SIZE(styles); s++) {
 			if (!styles[s].fast)
@@ -324,7 +412,7 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 
 			prooflen[i].len[s] = -1;
 			for (j = i-1; j >= (int)(i-skip); j--) {
-				size_t len = styles[s].proof_len(i, j);
+				size_t len = styles[s].proof_len(i, j, cache);
 				if (len + prooflen[j].len[s]
 				    < prooflen[i].len[s])
 					prooflen[i].len[s]
