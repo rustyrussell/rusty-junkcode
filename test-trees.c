@@ -158,108 +158,7 @@ static size_t rfc6962_batch_proof_len(size_t from, size_t to)
 	return batch_proof_len(from, to, true);
 }
 
-struct node {
-	size_t val;
-	struct node *child[2];
-};
-
-static struct node *new_node(size_t val, struct node *c1, struct node *c2)
-{
-	struct node *n = malloc(sizeof(*n));
-	n->child[0] = c1;
-	n->child[1] = c2;
-	n->val = val;
-	return n;
-}
-
-static void free_mmrtree(struct node *n)
-{
-	if (!n)
-		return;
-	free_mmrtree(n->child[0]);
-	free_mmrtree(n->child[1]);
-	free(n);
-}
-
-static struct node *fulltree(size_t off, size_t num)
-{
-	if (num == 1)
-		return new_node(off, NULL, NULL);
-	return new_node(-1, fulltree(off, num/2), fulltree(off + num/2, num/2));
-}
-
-static struct node *join_peaks(struct node **peaks, size_t num)
-{
-	size_t len;
-
-	if (num == 1)
-		return peaks[0];
-	if (num == 2)
-		return new_node(-1, peaks[0], peaks[1]);
-	len = (1 << (ilog32(num - 1) - 1));
-	return new_node(-1, join_peaks(peaks, len),
-			join_peaks(peaks + len, num - len));
-}
-
-static struct node *build_mmrtree(size_t max)
-{
-	int i, off = 0, peaknum = 0;
-	struct node *peaks[sizeof(size_t) * CHAR_BIT];
-
-	/* First, make peaks.*/
-	for (i = ARRAY_SIZE(peaks) - 1; i >= 0; i--) {
-		size_t summit = (size_t)1 << i;
-		if (max & summit) {
-			peaks[peaknum++] = fulltree(off, summit);
-			off += summit;
-		}
-	}
-	assert(off == max);
-
-	/* Now join peaks a-la RFC6962 */
-	return join_peaks(peaks, peaknum);
-}
-
-static size_t mmr_tree_depth(const struct node *node, size_t val)
-{
-	size_t depth;
-
-	if (!node)
-		return -1;
-
-	if (node->val == val)
-		return 0;
-
-	depth = mmr_tree_depth(node->child[0], val);
-	if (depth == -1) {
-		depth = mmr_tree_depth(node->child[1], val);
-		if (depth == -1)
-			return -1;
-	}
-	return depth + 1;
-}
-
-#if 0
-static size_t mmr_proof_len_fast(size_t from, size_t to)
-{
-	size_t mtns = __builtin_popcount(from);
-	size_t peak = 0, summit = 0;
-	int i;
-
-	for (i = sizeof(size_t)*8-1; i >= 0; --i)
-	{
-		summit = 1<<i;
-		if (from & summit)
-		{
-			if (to & summit) ++peak;
-			else             break;
-		}
-	}
-
-	return rfc6962_proof_len(mtns, peak) + ilog32(summit);
-}
-#else
-static size_t mmr_proof_len_fast(size_t from, size_t to)
+static size_t mmr_proof_len(size_t from, size_t to)
 {
 	size_t mtns = __builtin_popcount(from), off = 0, peaknum = 0;
 	int i;
@@ -278,21 +177,6 @@ static size_t mmr_proof_len_fast(size_t from, size_t to)
 	/* we need to get to mountain i, then down to element. */
 	return rfc6962_proof_len(mtns, peaknum) + i;
 }
-#endif
-
-static size_t mmr_proof_len(size_t from, size_t to)
-{
-	size_t depth;
-	struct node *tree;
-
-	depth = mmr_proof_len_fast(from, to);
-
-	tree = build_mmrtree(from);
-	assert(mmr_tree_depth(tree, to) == depth);
-	free_mmrtree(tree);
-
-	return depth;
-}
 
 struct style {
 	const char *name;
@@ -306,7 +190,7 @@ struct style styles[] = {
 	{ "maaku", false, maaku_proof_len },
 	{ "breadth-batch", true, breadth_batch_proof_len },
 	{ "rfc6962-batch", true, rfc6962_batch_proof_len },
-	{ "mmr", false, mmr_proof_len }
+	{ "mmr", true, mmr_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
