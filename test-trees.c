@@ -258,6 +258,26 @@ static size_t mmr_proof_len_fast(size_t from, size_t to)
 
 	return rfc6962_proof_len(mtns, peak) + ilog32(summit);
 }
+#else
+static size_t mmr_proof_len_fast(size_t from, size_t to)
+{
+	size_t mtns = __builtin_popcount(from), off = 0, peaknum = 0;
+	int i;
+
+	/* Which mountain is 'to' in? */
+	for (i = sizeof(size_t) * CHAR_BIT - 1; i >= 0; i--) {
+		size_t summit = (size_t)1 << i;
+		if (from & summit) {
+			off += summit;
+			if (to < off)
+				break;
+			peaknum++;
+		}
+	}
+
+	/* we need to get to mountain i, then down to element. */
+	return rfc6962_proof_len(mtns, peaknum) + i;
+}
 #endif
 
 static size_t mmr_proof_len(size_t from, size_t to)
@@ -265,8 +285,10 @@ static size_t mmr_proof_len(size_t from, size_t to)
 	size_t depth;
 	struct node *tree;
 
+	depth = mmr_proof_len_fast(from, to);
+
 	tree = build_mmrtree(from);
-	depth = mmr_tree_depth(tree, to);
+	assert(mmr_tree_depth(tree, to) == depth);
 	free_mmrtree(tree);
 
 	return depth;
