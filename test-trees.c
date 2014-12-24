@@ -48,7 +48,7 @@ static size_t optimal_proof_len(size_t from, size_t to)
 	return prooflen_for_internal_node(depth);
 }
 
-/* Array approach is just to built the tree from an array, in order,
+/* RFC 6962 approach is just to built the tree from an array, in order,
  * using external nodes:
  *
  *         ^
@@ -75,7 +75,7 @@ static size_t do_proof_len(size_t to, size_t start, size_t end)
 	return 1 + do_proof_len(to, start + len, end);
 }
 
-static size_t array_proof_len(size_t from, size_t to)
+static size_t rfc6962_proof_len(size_t from, size_t to)
 {
 	return do_proof_len(to, 0, from);
 }
@@ -112,7 +112,7 @@ static size_t maaku_proof_len(size_t from, size_t to)
  *      /    \
  *  0-65534 65535-131069
  *
- * There's also a variant where we simply back onto an array-style tree.
+ * There's also a variant where we simply back onto an rfc6962-style tree.
  */
 #define SUBTREE_SIZE 65535
 
@@ -132,8 +132,8 @@ static size_t batch_proof_len(size_t from, size_t to, bool array)
 	}
 
 	if (array)
-		/* Use array for old entries. */
-		return 1 + array_proof_len(from_tree * SUBTREE_SIZE, to);
+		/* Use rfc6862 for old entries. */
+		return 1 + rfc6962_proof_len(from_tree * SUBTREE_SIZE, to);
 
 	/* It's in an older tree.  One to get to the old trees, and
 	 * one extra branch for every tree we go back. */
@@ -153,7 +153,7 @@ static size_t breadth_batch_proof_len(size_t from, size_t to)
 	return batch_proof_len(from, to, false);
 }
 
-static size_t array_batch_proof_len(size_t from, size_t to)
+static size_t rfc6962_batch_proof_len(size_t from, size_t to)
 {
 	return batch_proof_len(from, to, true);
 }
@@ -174,7 +174,7 @@ static size_t mmr_proof_len(size_t from, size_t to)
 		}
 	}
 
-	return array_proof_len(mtns, peak) + ilog32(summit);
+	return rfc6962_proof_len(mtns, peak) + ilog32(summit);
 }
 
 struct style {
@@ -184,11 +184,11 @@ struct style {
 };
 
 struct style styles[] = {
-	{ "array", true, array_proof_len },
+	{ "rfc6862", true, rfc6962_proof_len },
 	{ "optimal", true, optimal_proof_len },
 	{ "maaku", false, maaku_proof_len },
 	{ "breadth-batch", true, breadth_batch_proof_len },
-	{ "array-batch", true, array_batch_proof_len },
+	{ "rfc6962-batch", true, rfc6962_batch_proof_len },
 	{ "mmr", true, mmr_proof_len }
 };
 
