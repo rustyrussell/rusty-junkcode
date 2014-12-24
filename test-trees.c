@@ -158,6 +158,23 @@ static size_t rfc6962_batch_proof_len(size_t from, size_t to)
 	return batch_proof_len(from, to, true);
 }
 
+/*
+ * See https://github.com/opentimestamps/opentimestamps-server/blob/master/doc/merkle-mountain-range.md
+ *
+ * We connect the peaks using rfc6962, which means that more recent
+ * transactions are shorter.  eg. 7 elements:
+ *
+ *          /\
+ *         /  6
+ *        /\
+ *       /  \
+ *      /    \
+ *     /      \
+ *    /\      /\
+ *   /  \    4  5
+ *  /\  /\ 
+ * 0 1  2 3
+ */
 static size_t mmr_proof_len(size_t from, size_t to)
 {
 	size_t mtns = __builtin_popcount(from), off = 0, peaknum = 0;
@@ -190,16 +207,25 @@ struct style styles[] = {
 	{ "maaku", false, maaku_proof_len },
 	{ "breadth-batch", true, breadth_batch_proof_len },
 	{ "rfc6962-batch", true, rfc6962_batch_proof_len },
-	{ "mmr", true, mmr_proof_len }
+	{ "mmr", true, mmr_proof_len },
+	{ "mmr-with-cache", true, mmr_cache_proof_len }
 };
+
+#define CACHE_SIZE 32
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
 {
 	int *dist, *step;
 	size_t i, s, plen;
 	struct isaac64_ctx isaac;
+	uint64_t cache[CACHE_SIZE];
+	uint64_t cache_skipval[CACHE_SIZE];
 
 	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
+	for (i = 0; i < ARRAY_SIZE(cache); i++) {
+		cache[i] = 0;
+		cache_vals[i] = -1ULL;
+	}
 
 	dist = calloc(sizeof(*dist), num);
 	step = calloc(sizeof(*step), num);
@@ -210,6 +236,7 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 
 		if (skip > i)
 			skip = i;
+		add_cache_skipval(cache, cache_skipval, i, skipval);
 
 		best = i-1;
 		for (j = i-1; j >= (int)(i-skip); j--)
@@ -230,7 +257,7 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 			continue;
 		plen = 0;
 		for (i = num-1; i != target; i = step[i])
-			plen += styles[s].proof_len(i, step[i]);
+			plen += styles[s].proof_len(i, step[i], cache);
 		printf("%s: proof hashes %zu\n", styles[s].name, plen);
 	}
 
