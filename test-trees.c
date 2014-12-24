@@ -262,7 +262,57 @@ static void add_to_cache(struct cache *cache,
 	cache[i].skip = skip;
 	cache[i].blocknum = blocknum;
 }
-	
+
+/* FIXME: Store the huff depth in cache, and recalc only when cache changes */
+struct huff_info {
+	size_t total_skips;
+	size_t depth_of_node;
+};
+
+static void insert_huff(struct huff_info *info, size_t cachesize,
+			const struct huff_info *comb)
+{
+	size_t i;
+
+	for (i = 0; info[i].total_skips > comb->total_skips; i++);
+	memmove(info + i + 1, info + i, sizeof(*info) * (cachesize - i - 1));
+	info[i] = *comb;
+}
+
+static size_t get_huffman_depth(const struct cache *c, size_t cachesize,
+				size_t blocknum)
+{
+	struct huff_info info[cachesize];
+	int i;
+
+	for (i = 0; i < cachesize; i++) {
+		info[i].total_skips = c[i].skip;
+		if (c[i].blocknum == blocknum)
+			info[i].depth_of_node = 0;
+		else
+			info[i].depth_of_node = -1;
+	}
+
+	/* We always keep cache in largest->smallest order, so
+	 * just grab last two and combine them. */
+	while (cachesize > 1) {
+		struct huff_info comb;
+		comb.total_skips = info[cachesize-1].total_skips
+			+ info[cachesize-2].total_skips;
+		if (info[cachesize-1].depth_of_node == -1) {
+			if (info[cachesize-2].depth_of_node == -1) {
+				comb.depth_of_node = -1;
+			} else
+				comb.depth_of_node = 1 + info[cachesize-2].depth_of_node;
+		} else
+			comb.depth_of_node = 1 + info[cachesize-1].depth_of_node;
+
+		insert_huff(info, cachesize, &comb);
+		cachesize--;
+	}
+
+	return info[0].depth_of_node;
+}
 
 /*
  * This simulates a "cache" of the luckiest blocks, ie:
@@ -274,7 +324,7 @@ static void add_to_cache(struct cache *cache,
  * The cache duplicates blocks in the normal mmr tree.
  */
 static size_t mmr_cache_proof_len(size_t from, size_t to, const struct cache *c,
-				  size_t cachesize)
+				  size_t cachesize, bool huffman)
 {
 	int i;
 
@@ -287,7 +337,11 @@ static size_t mmr_cache_proof_len(size_t from, size_t to, const struct cache *c,
 	/* If it's in the cache, use that. */
 	for (i = 0; i < cachesize; i++) {
 		if (c[i].blocknum == to) {
-			return 1 + ilog32(cachesize);
+			/* Simple cache structure is a tree. */
+			if (!huffman)
+				return 1 + ilog32(cachesize);
+			/* huffman encoding FTW. */
+			return 1 + get_huffman_depth(c, cachesize, to);
 		}
 	}
 
@@ -297,19 +351,31 @@ static size_t mmr_cache_proof_len(size_t from, size_t to, const struct cache *c,
 static size_t mmr_cache64_proof_len(size_t from, size_t to,
 				    const struct cache *c)
 {
-	return mmr_cache_proof_len(from, to, c, 64);
+	return mmr_cache_proof_len(from, to, c, 64, false);
 }
 
 static size_t mmr_cache32_proof_len(size_t from, size_t to,
 				    const struct cache *c)
 {
-	return mmr_cache_proof_len(from, to, c, 32);
+	return mmr_cache_proof_len(from, to, c, 32, false);
 }
 
 static size_t mmr_cache16_proof_len(size_t from, size_t to,
 				    const struct cache *c)
 {
-	return mmr_cache_proof_len(from, to, c, 16);
+	return mmr_cache_proof_len(from, to, c, 16, false);
+}
+
+static size_t mmr_cachehuff32_proof_len(size_t from, size_t to,
+				      const struct cache *c)
+{
+	return mmr_cache_proof_len(from, to, c, 32, true);
+}
+
+static size_t mmr_cachehuff64_proof_len(size_t from, size_t to,
+				      const struct cache *c)
+{
+	return mmr_cache_proof_len(from, to, c, 64, true);
 }
 
 struct style {
@@ -328,7 +394,9 @@ struct style styles[] = {
 	{ "mmr-linear", true, mmr_linear_proof_len },
 	{ "mmr-cache-sixtyfour", true, mmr_cache64_proof_len },
 	{ "mmr-cache-thirtytwo", true, mmr_cache32_proof_len },
-	{ "mmr-cache-sixteen", true, mmr_cache16_proof_len }
+	{ "mmr-cache-sixteen", true, mmr_cache16_proof_len },
+	{ "mmr-cachehuff-sixtyfour", true, mmr_cachehuff64_proof_len },
+	{ "mmr-cachehuff-thirtytwo", true, mmr_cachehuff32_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
