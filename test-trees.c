@@ -162,20 +162,41 @@ static size_t rfc6962_batch_proof_len(size_t from, size_t to)
  * See https://github.com/opentimestamps/opentimestamps-server/blob/master/doc/merkle-mountain-range.md
  *
  * We connect the peaks using rfc6962, which means that more recent
- * transactions are shorter.  eg. 7 elements:
+ * transactions are shorter.  eg. 7 elements makes three peaks:
  *
- *          /\
+ *
+ *   (1)     (2)    (3)
+ *
+ *    /\      /\     6
+ *   /  \    4  5
+ *  /\  /\ 
+ * 0 1  2 3
+ *
+ * These are connected like so:
+ *
+ *          /\(3)
  *         /  6
  *        /\
  *       /  \
  *      /    \
- *     /      \
+ *     /(1)   \ (2)
  *    /\      /\
  *   /  \    4  5
  *  /\  /\ 
  * 0 1  2 3
+ *
+ * The linear variant connects the peaks like so:
+ *              ...
+ *             /
+ *            /\(4)
+ *           /
+ *          /\(3)
+ *         /
+ *        /\
+ *       /  \
+ *     (1)  (2)
  */
-static size_t mmr_proof_len(size_t from, size_t to)
+static size_t mmr_variant_proof_len(size_t from, size_t to, bool linear)
 {
 	size_t mtns = __builtin_popcount(from), off = 0, peaknum = 0;
 	int i;
@@ -192,7 +213,23 @@ static size_t mmr_proof_len(size_t from, size_t to)
 	}
 
 	/* we need to get to mountain i, then down to element. */
-	return rfc6962_proof_len(mtns, peaknum) + i;
+	if (linear) {
+		if (peaknum == 0)
+			return mtns - peaknum - 1 + i;
+		else
+			return mtns - peaknum + i;
+	} else
+		return rfc6962_proof_len(mtns, peaknum) + i;
+}
+
+static size_t mmr_proof_len(size_t from, size_t to)
+{
+	return mmr_variant_proof_len(from, to, false);
+}
+
+static size_t mmr_linear_proof_len(size_t from, size_t to)
+{
+	return mmr_variant_proof_len(from, to, true);
 }
 
 struct style {
@@ -207,7 +244,8 @@ struct style styles[] = {
 	{ "maaku", false, maaku_proof_len },
 	{ "breadth-batch", true, breadth_batch_proof_len },
 	{ "rfc6962-batch", true, rfc6962_batch_proof_len },
-	{ "mmr", true, mmr_proof_len }
+	{ "mmr", true, mmr_proof_len },
+	{ "mmr-linear", true, mmr_linear_proof_len }
 };
 
 #define CACHE_SIZE 32
