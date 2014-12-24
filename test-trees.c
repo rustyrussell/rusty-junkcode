@@ -63,10 +63,10 @@ static size_t do_proof_len(size_t to, size_t start, size_t end)
 {
 	size_t len;
 
-	/* last node? */
-	if (end - start <= 2) {
-		assert(to >= start && to < end);
-		return 1;
+	/* Reached the node? */
+	if (end - start == 1) {
+		assert(to == start);
+		return 0;
 	}
 
 	len = (1 << (ilog32(end - start - 1) - 1));
