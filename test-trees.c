@@ -48,7 +48,8 @@ static size_t prooflen_for_internal_node(size_t depth)
  * Of course, generating this to verify gets worse over time.
  *
  * The depth of a node == log2(dist). */
-static size_t optimal_proof_len(size_t from, size_t to, const struct cache *c)
+static size_t optimal_proof_len(size_t from, size_t to, const struct cache *c,
+				const int *step)
 {
 	size_t depth = ilog32(from - to);
 
@@ -82,12 +83,14 @@ static size_t do_proof_len(size_t to, size_t start, size_t end)
 	return 1 + do_proof_len(to, start + len, end);
 }
 
-static size_t rfc6962_proof_len(size_t from, size_t to, const struct cache *c)
+static size_t rfc6962_proof_len(size_t from, size_t to, const struct cache *c,
+				const int *step)
 {
 	return do_proof_len(to, 0, from);
 }
 
-static size_t maaku_proof_len(size_t from, size_t to, const struct cache *c)
+static size_t maaku_proof_len(size_t from, size_t to, const struct cache *c,
+			      const int *step)
 {
 	struct maaku_tree t;
 	size_t i, depth;
@@ -134,13 +137,14 @@ static size_t batch_proof_len(size_t from, size_t to, bool array)
 		/* It's in the tree we're building.  This falls back to the
 		 * optimal case if we only have one subtree so far */
 		if (from < SUBTREE_SIZE)
-			return optimal_proof_len(from, to, NULL);
-		return 1 + optimal_proof_len(from, to, NULL);
+			return optimal_proof_len(from, to, NULL, NULL);
+		return 1 + optimal_proof_len(from, to, NULL, NULL);
 	}
 
 	if (array)
 		/* Use rfc6862 for old entries. */
-		return 1 + rfc6962_proof_len(from_tree * SUBTREE_SIZE, to, NULL);
+		return 1 + rfc6962_proof_len(from_tree * SUBTREE_SIZE, to,
+					     NULL, NULL);
 
 	/* It's in an older tree.  One to get to the old trees, and
 	 * one extra branch for every tree we go back. */
@@ -152,15 +156,20 @@ static size_t batch_proof_len(size_t from, size_t to, bool array)
 
 	/* One hash to get to get down the tree, plus proof inside the
 	 * tree. */
-	return tree_depth + optimal_proof_len(SUBTREE_SIZE, to%SUBTREE_SIZE, NULL);
+	return tree_depth + optimal_proof_len(SUBTREE_SIZE, to%SUBTREE_SIZE,
+					      NULL, NULL);
 }
 
-static size_t breadth_batch_proof_len(size_t from, size_t to, const struct cache *c)
+static size_t breadth_batch_proof_len(size_t from, size_t to,
+				      const struct cache *c,
+				      const int *step)
 {
 	return batch_proof_len(from, to, false);
 }
 
-static size_t rfc6962_batch_proof_len(size_t from, size_t to, const struct cache *c)
+static size_t rfc6962_batch_proof_len(size_t from, size_t to,
+				      const struct cache *c,
+				      const int *step)
 {
 	return batch_proof_len(from, to, true);
 }
@@ -226,15 +235,18 @@ static size_t mmr_variant_proof_len(size_t from, size_t to, bool linear)
 		else
 			return mtns - peaknum + i;
 	} else
-		return rfc6962_proof_len(mtns, peaknum, NULL) + i;
+		return rfc6962_proof_len(mtns, peaknum, NULL, NULL) + i;
 }
 
-static size_t mmr_proof_len(size_t from, size_t to, const struct cache *c)
+static size_t mmr_proof_len(size_t from, size_t to, const struct cache *c,
+			    const int *step)
 {
 	return mmr_variant_proof_len(from, to, false);
 }
 
-static size_t mmr_linear_proof_len(size_t from, size_t to, const struct cache *c)
+static size_t mmr_linear_proof_len(size_t from, size_t to,
+				   const struct cache *c,
+				   const int *step)
 {
 	return mmr_variant_proof_len(from, to, true);
 }
@@ -332,7 +344,7 @@ static size_t mmr_cache_proof_len(size_t from, size_t to, const struct cache *c,
 
 	/* Don't use cache for v. early blocks. */
 	if (from < cachesize * 2)
-		return mmr_proof_len(from, to, c);
+		return mmr_proof_len(from, to, c, NULL);
 
 	/* If it's in the cache, use that. */
 	for (i = 0; i < cachesize; i++) {
@@ -345,43 +357,66 @@ static size_t mmr_cache_proof_len(size_t from, size_t to, const struct cache *c,
 		}
 	}
 
-	return 1 + mmr_proof_len(from, to, c);
+	return 1 + mmr_proof_len(from, to, c, NULL);
 }
 
 static size_t mmr_cache64_proof_len(size_t from, size_t to,
-				    const struct cache *c)
+				    const struct cache *c,
+				    const int *step)
 {
 	return mmr_cache_proof_len(from, to, c, 64, false);
 }
 
 static size_t mmr_cache32_proof_len(size_t from, size_t to,
-				    const struct cache *c)
+				    const struct cache *c,
+				    const int *step)
 {
 	return mmr_cache_proof_len(from, to, c, 32, false);
 }
 
 static size_t mmr_cache16_proof_len(size_t from, size_t to,
-				    const struct cache *c)
+				    const struct cache *c,
+				    const int *step)
 {
 	return mmr_cache_proof_len(from, to, c, 16, false);
 }
 
 static size_t mmr_cachehuff32_proof_len(size_t from, size_t to,
-				      const struct cache *c)
+					const struct cache *c,
+					const int *step)
 {
 	return mmr_cache_proof_len(from, to, c, 32, true);
 }
 
 static size_t mmr_cachehuff64_proof_len(size_t from, size_t to,
-				      const struct cache *c)
+					const struct cache *c,
+					const int *step)
 {
 	return mmr_cache_proof_len(from, to, c, 64, true);
+}
+
+/* Each block has a cache of steps *prev* found useful. */
+static size_t mmr_prevsteps_proof_len(size_t from, size_t to,
+				      const struct cache *c,
+				      const int *step)
+{
+	size_t i, n, found = -1;
+
+	for (i = step[from-1], n = 0; i != 0; i = step[i], n++) {
+		if (i == to)
+			found = n;
+	}
+	/* It was in the cache?  Thats another MMR tree (in block order) */
+	if (found != -1)
+		return 1 + mmr_proof_len(n, n - found - 1, c, NULL);
+	return 1 + mmr_proof_len(from, to, c, NULL);
 }
 
 struct style {
 	const char *name;
 	bool fast; /* Fast to calculate depth. */
-	size_t (*proof_len)(size_t, size_t, const struct cache *);
+	size_t (*proof_len)(size_t, size_t, const struct cache *,
+			    const int *step);
 };
 
 struct style styles[] = {
@@ -396,7 +431,8 @@ struct style styles[] = {
 	{ "mmr-cache-thirtytwo", true, mmr_cache32_proof_len },
 	{ "mmr-cache-sixteen", true, mmr_cache16_proof_len },
 	{ "mmr-cachehuff-sixtyfour", true, mmr_cachehuff64_proof_len },
-	{ "mmr-cachehuff-thirtytwo", true, mmr_cachehuff32_proof_len }
+	{ "mmr-cachehuff-thirtytwo", true, mmr_cachehuff32_proof_len },
+	{ "mmr-prevsteps", true, mmr_prevsteps_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
@@ -439,7 +475,7 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 			continue;
 		plen = 0;
 		for (i = num-1; i != target; i = step[i])
-			plen += styles[s].proof_len(i, step[i], cache);
+			plen += styles[s].proof_len(i, step[i], cache, step);
 		printf("%s: proof hashes %zu\n", styles[s].name, plen);
 	}
 
@@ -459,10 +495,13 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 	struct cache cache[CACHE_SIZE];
 	size_t i, s;
 	struct isaac64_ctx isaac;
+	int *step[ARRAY_SIZE(styles)];
 
 	isaac64_init(&isaac, (void *)&seed, sizeof(seed));
 
 	prooflen = calloc(sizeof(*prooflen), num);
+	for (s = 0; s < ARRAY_SIZE(styles); s++)
+		step[s] = calloc(sizeof(*step[s]), num);
 	init_cache(cache);
 
 	for (i = target+1; i < num; i++) {
@@ -480,11 +519,14 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 
 			prooflen[i].len[s] = -1;
 			for (j = i-1; j >= (int)(i-skip); j--) {
-				size_t len = styles[s].proof_len(i, j, cache);
+				size_t len = styles[s].proof_len(i, j, cache,
+								 step[s]);
 				if (len + prooflen[j].len[s]
-				    < prooflen[i].len[s])
+				    < prooflen[i].len[s]) {
 					prooflen[i].len[s]
 						= len + prooflen[j].len[s];
+					step[s][i] = j;
+				}
 			}
 		}
 	}
@@ -496,6 +538,8 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 		       prooflen[num-1].len[s]);
 	}
 	free(prooflen);
+	for (s = 0; s < ARRAY_SIZE(styles); s++)
+		free(step[s]);
 }
 
 int main(int argc, char *argv[])
