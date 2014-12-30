@@ -11,17 +11,17 @@
  * path. */
 struct path {
 	int blocknum;
-	size_t num_hashes;
+	unsigned int num_hashes;
 };
 
 struct block {
 	uint64_t hash;
 	/* which prev do we actually jump to. */
-	size_t prev_used;
+	unsigned int prev_used;
 	/* These are merkled into a tree, but we hold them in an array. */
-	size_t num_prevs;
+	unsigned int num_prevs;
 	/* This is our distance to the genesis block. */
-	size_t hashes_to_genesis;
+	unsigned int hashes_to_genesis;
 	struct path *prevs;
 };
 
@@ -231,7 +231,7 @@ static int proof_len(const struct path *prevs, size_t num_prevs, int blocknum,
 
 /* make a copy of prevs from previous block, adding previous block in. */
 static struct path *append_prev(const struct block *prev, int prev_blocknum,
-				size_t *path_len,
+				unsigned int *path_len,
 				size_t (*len_func)(const struct path *prevs,
 						   size_t, size_t))
 {
@@ -246,6 +246,35 @@ static struct path *append_prev(const struct block *prev, int prev_blocknum,
 		+ proof_len(prevs, *path_len, prev_blocknum, len_func);
 
 	return prevs;
+}
+
+static void print_path_to_target(struct block *blocks,
+				 size_t num, size_t target,
+				 size_t (*len_func)(const struct path *,
+						    size_t, size_t))
+{
+	int i;
+	unsigned int distance[num];
+
+	distance[target] = 0;
+	for (i = target + 1; i < num; i++) {
+		int j;
+
+		distance[i] = -1;
+		/* Of the prevs we can use, which gives least hashes
+		 * to target? */
+		for (j = blocks[i].prev_used; j < blocks[i].num_prevs; j++) {
+			unsigned int dist;
+			const struct path *prevs = blocks[i].prevs;
+
+			dist = prevs[j].num_hashes
+				+ len_func(prevs, blocks[i].num_prevs, j);
+			if (dist < distance[i])
+				distance[i] = dist;
+		}
+	}
+
+	printf("prooflen: proof hashes to target %u\n", distance[num-1]);
 }
 
 static void print_incremental_length(size_t num, size_t target, size_t seed,
@@ -269,13 +298,6 @@ static void print_incremental_length(size_t num, size_t target, size_t seed,
 		blocks[i].prevs = append_prev(&blocks[i-1], i-1,
 					      &blocks[i].num_prevs,
 					      len_func);
-
-		/* Free up old paths on blocks no longer on our path. */
-		for (j = blocks[i-1].prev_used + 1;
-		     j < blocks[i-1].num_prevs;
-		     j++) {
-			free(blocks[blocks[i-1].prevs[j].blocknum].prevs);
-		}
 
 		/* Now generate block. */
 		blocks[i].hash = isaac64_next_uint64(&isaac);
@@ -308,11 +330,13 @@ static void print_incremental_length(size_t num, size_t target, size_t seed,
 		blocks[i].hashes_to_genesis = best_distance;
 	}
 
-	/* If we want to get to a specific target... */
-	if (target)
-		errx(1, "--target not implemented yet.");
+	/* For specific target, we need to calculate optimal path. */
+	if (target) {
+		print_path_to_target(blocks, num, target, len_func);
+		return;
+	}
 
-	printf("prooflen: proof path %zu, hashes %zu\n",
+	printf("prooflen: proof path %u, hashes %u\n",
 	       blocks[num-1].num_prevs-1,
 	       blocks[num-1].prevs[blocks[num-1].prev_used].num_hashes
 		+ proof_len(blocks[num-1].prevs, blocks[num-1].num_prevs,
