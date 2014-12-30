@@ -1,4 +1,3 @@
-#include "maakutree.h"
 #include <ccan/array_size/array_size.h>
 #include <ccan/isaac/isaac64.h>
 #include <ccan/ilog/ilog.h>
@@ -87,23 +86,6 @@ static size_t rfc6962_proof_len(size_t from, size_t to, const struct cache *c,
 				const int *step)
 {
 	return do_proof_len(to, 0, from);
-}
-
-static size_t maaku_proof_len(size_t from, size_t to, const struct cache *c,
-			      const int *step)
-{
-	struct maaku_tree t;
-	size_t i, depth;
-
-	t.max_depth = 0;
-	t.root = NULL;
-	for (i = 0; i < from; i++)
-		add_maaku_node(&t, i);
-
-	depth = find_maaku_node(t.root, to)->depth;
-	free_maaku_tree(&t);
-
-	return prooflen_for_internal_node(depth);
 }
 
 /*
@@ -414,25 +396,23 @@ static size_t mmr_prevsteps_proof_len(size_t from, size_t to,
 
 struct style {
 	const char *name;
-	bool fast; /* Fast to calculate depth. */
 	size_t (*proof_len)(size_t, size_t, const struct cache *,
 			    const int *step);
 };
 
 struct style styles[] = {
-	{ "rfc6862", true, rfc6962_proof_len },
-	{ "optimal", true, optimal_proof_len },
-	{ "maaku", false, maaku_proof_len },
-	{ "breadth-batch", true, breadth_batch_proof_len },
-	{ "rfc6962-batch", true, rfc6962_batch_proof_len },
-	{ "mmr", true, mmr_proof_len },
-	{ "mmr-linear", true, mmr_linear_proof_len },
-	{ "mmr-cache-sixtyfour", true, mmr_cache64_proof_len },
-	{ "mmr-cache-thirtytwo", true, mmr_cache32_proof_len },
-	{ "mmr-cache-sixteen", true, mmr_cache16_proof_len },
-	{ "mmr-cachehuff-sixtyfour", true, mmr_cachehuff64_proof_len },
-	{ "mmr-cachehuff-thirtytwo", true, mmr_cachehuff32_proof_len },
-	{ "mmr-prevsteps", true, mmr_prevsteps_proof_len }
+	{ "rfc6862", rfc6962_proof_len },
+	{ "optimal", optimal_proof_len },
+	{ "breadth-batch", breadth_batch_proof_len },
+	{ "rfc6962-batch", rfc6962_batch_proof_len },
+	{ "mmr", mmr_proof_len },
+	{ "mmr-linear", mmr_linear_proof_len },
+	{ "mmr-cache-sixtyfour", mmr_cache64_proof_len },
+	{ "mmr-cache-thirtytwo", mmr_cache32_proof_len },
+	{ "mmr-cache-sixteen", mmr_cache16_proof_len },
+	{ "mmr-cachehuff-sixtyfour", mmr_cachehuff64_proof_len },
+	{ "mmr-cachehuff-thirtytwo", mmr_cachehuff32_proof_len },
+	{ "mmr-prevsteps", mmr_prevsteps_proof_len }
 };
 
 static void print_proof_lengths(size_t num, size_t target, size_t seed)
@@ -471,8 +451,6 @@ static void print_proof_lengths(size_t num, size_t target, size_t seed)
 #endif
 
 	for (s = 0; s < ARRAY_SIZE(styles); s++) {
-		if (!styles[s].name)
-			continue;
 		plen = 0;
 		for (i = num-1; i != target; i = step[i])
 			plen += styles[s].proof_len(i, step[i], cache, step);
@@ -514,9 +492,6 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 		add_to_cache(cache, skip, i);
 
 		for (s = 0; s < ARRAY_SIZE(styles); s++) {
-			if (!styles[s].fast)
-				continue;
-
 			prooflen[i].len[s] = -1;
 			for (j = i-1; j >= (int)(i-skip); j--) {
 				size_t len = styles[s].proof_len(i, j, cache,
@@ -532,8 +507,6 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 	}
 
 	for (s = 0; s < ARRAY_SIZE(styles); s++) {
-		if (!styles[s].fast)
-			continue;
 		printf("prooflen-%s: proof hashes %u\n", styles[s].name,
 		       prooflen[num-1].len[s]);
 	}
@@ -545,7 +518,6 @@ static void print_optimal_length(size_t num, size_t target, size_t seed)
 int main(int argc, char *argv[])
 {
 	unsigned int num, seed = 0, target = 0;
-	bool maaku = true;
 
 	opt_register_noarg("--usage|--help|-h", opt_usage_and_exit,
 			   "<num>\n"
@@ -556,17 +528,10 @@ int main(int argc, char *argv[])
 			 "Block number to terminate SPV proof at");
 	opt_register_arg("--seed", opt_set_uintval, opt_show_uintval, &seed,
 			 "Seed for deterministic RNG");
-	opt_register_noarg("--no-maaku", opt_set_invbool,
-			   &maaku, "Skip the maaku tree");
 
 	opt_parse(&argc, argv, opt_log_stderr_exit);
 	if (argc != 2)
 		opt_usage_and_exit(NULL);
-
-	if (!maaku) {
-		assert(strcmp(styles[2].name, "maaku") == 0);
-		styles[2].name = NULL;
-	}
 
 	num = atoi(argv[1]);
 	if (target >= num)

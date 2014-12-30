@@ -157,10 +157,10 @@ void free_maaku_tree(struct maaku_tree *t)
 	t->root = NULL;
 }
 
-#ifdef TEST
 int main(int argc, char *argv[])
 {
 	struct maaku_tree t;
+	size_t i, num;
 
 	t.max_depth = 0;
 	t.root = NULL;
@@ -169,22 +169,22 @@ int main(int argc, char *argv[])
 		errx(1, "Usage: %s <num>", argv[0]);
 
 	num = atoi(argv[1]);
-	check_tree(&t, -1);
+	check_maaku_tree(&t, -1);
 	for (i = 0; i < num; i++) {
 		add_maaku_node(&t, i);
 #ifdef DEBUG
-		check_tree(&t, i);
+		check_maaku_tree(&t, i);
 #endif
 		printf("Adding node %zu: max_depth %zu, swaps %zu\n",
 		       i, t.max_depth, swapcount);
 		swapcount = 0;
 	}
 
-	check_tree(&t, i);
+	check_maaku_tree(&t, i);
 	for (i = 0; i < num; i++) {
 		printf("Depth of %zu = %zu\n", num - i - 1,
-		       find_node(t.root, num - i - 1)->depth);
+		       find_maaku_node(t.root, num - i - 1)->depth);
 	}
 	return 0;
 }
-#endif
+
