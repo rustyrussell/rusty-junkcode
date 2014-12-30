@@ -7,6 +7,25 @@
 #include <assert.h>
 #include <string.h>
 
+/* We encode block number and distance (in # hashes) for the previous
+ * path. */
+struct path {
+	int blocknum;
+	size_t num_hashes;
+};
+
+struct block {
+	uint64_t hash;
+	/* which prev do we actually jump to. */
+	size_t prev_used;
+	/* These are merkled into a tree, but we hold them in an array. */
+	size_t num_prevs;
+	/* This is our distance to the genesis block. */
+	size_t hashes_to_genesis;
+	struct path *prevs;
+};
+
+
 /* RFC 6962 approach is just to built the tree from an array, in order,
  * using external nodes:
  *
@@ -34,9 +53,14 @@ static size_t do_proof_len(size_t to, size_t start, size_t end)
 	return 1 + do_proof_len(to, start + len, end);
 }
 
-static size_t rfc6962_proof_len(size_t from, size_t to)
+static size_t rfc6962_proof_len(const struct path *prevs, size_t num_prevs, size_t to)
 {
-	return do_proof_len(to, 0, from);
+	return do_proof_len(to, 0, num_prevs);
+}
+
+static size_t rev_rfc6962_proof_len(const struct path *prevs, size_t num_prevs, size_t to)
+{
+	return do_proof_len(num_prevs - to - 1, 0, num_prevs);
 }
 
 /*
@@ -66,7 +90,7 @@ static size_t rfc6962_proof_len(size_t from, size_t to)
  *  /\  /\ 
  * 0 1  2 3
  */
-static size_t mmr_proof_len(size_t num, size_t node)
+static size_t mmr_proof_len(const struct path *prevs, size_t num, size_t node)
 {
 	size_t mtns = __builtin_popcount(num), off = 0, peaknum = 0;
 	int i;
@@ -83,36 +107,120 @@ static size_t mmr_proof_len(size_t num, size_t node)
 	}
 
 	/* we need to get to mountain i, then down to element. */
-	return rfc6962_proof_len(mtns, peaknum) + i;
+	return rfc6962_proof_len(prevs, mtns, peaknum) + i;
 }
 
-/* We encode block number and distance (in # hashes) for the previous
- * path. */
-struct path {
-	int blocknum;
-	size_t num_hashes;
+/* So we need 1 hash if at depth 0, 3 at depth 1, etc. */
+static size_t prooflen_for_internal_node(size_t depth)
+{
+	if (depth == 0)
+		return 1;
+	return (depth - 1) * 2 + 1;
+}
+
+/* Ideal case would use a breadth first internal node system.  Since
+ * short proofs are more common than long proofs, the optimal is a
+ * breadth first tree:
+ *
+ *             N
+ *           /   \
+ *          /     \
+ *       N-1       N-2
+ *      /   \     /   \
+ *    N-3  N-4  N-5   N-6
+ *
+ * Of course, generating this to verify gets worse over time.
+ *
+ * The depth of a node == log2(dist). */
+static size_t breadth_proof_len(const struct path *prevs, size_t num_prevs, size_t to)
+{
+	size_t depth = ilog32(num_prevs - to);
+
+	return prooflen_for_internal_node(depth);
+}
+
+static size_t rev_breadth_proof_len(const struct path *prevs,
+				    size_t num_prevs, size_t to)
+{
+	size_t depth = ilog32(to);
+
+	return prooflen_for_internal_node(depth);
+}
+
+static size_t naive_proof_len(const struct path *prevs, size_t num_prevs, size_t to)
+{
+	size_t naive = ilog32(num_prevs);
+	assert((1 << naive) >= num_prevs);
+	return naive;
+}
+
+struct huff_node {
+	/* If != -1 depth of target. */
+	int depth;
+	size_t score;
 };
 
-struct block {
-	uint64_t hash;
-	/* which prev do we actually jump to. */
-	size_t prev_used;
-	/* These are merkled into a tree, but we hold them in an array. */
-	size_t num_prevs;
-	/* This is our distance to the genesis block. */
-	size_t hashes_to_genesis;
-	struct path *prevs;
-};
+static int compare_scores(const void *va, const void *vb)
+{
+	const struct huff_node *a = va, *b = vb;
 
+	if (a->score > b->score)
+		return -1;
+	else if (a->score < b->score)
+		return 1;
+	/* FIXME: In real life, must define second key for equal (ie. blocknum) */
+	return 0;
+}
+
+/* Huffman by blocknum. */
+static size_t huffman_proof_len(const struct path *prevs,
+				size_t num_prevs, size_t to)
+{
+	struct huff_node huff[num_prevs];
+	size_t i;
+
+	for (i = 0; i < num_prevs; i++) {
+		if (i == to)
+			huff[i].depth = 0;
+		else
+			huff[i].depth = -1;
+		huff[i].score = prevs[i].blocknum;
+	}
+	qsort(huff, num_prevs, sizeof(huff[0]), compare_scores);
+
+	while (num_prevs != 1) {
+		/* Combine least two. */
+		struct huff_node comb;
+		comb.score = huff[num_prevs-1].score + huff[num_prevs-2].score;
+		comb.depth = -1;
+		if (huff[num_prevs-1].depth != -1)
+			comb.depth = huff[num_prevs-1].depth + 1;
+		else if (huff[num_prevs-2].depth != -1)
+			comb.depth = huff[num_prevs-2].depth + 1;
+		num_prevs--;
+
+		for (i = 0; i < num_prevs - 1; i++)
+			if (huff[i].score < comb.score)
+				break;
+		memmove(huff + i + 1, huff + i, sizeof(huff[i]) * (num_prevs - 1 - i));
+		huff[i] = comb;
+	}
+
+	assert(huff[0].depth >= 0);
+	return huff[0].depth;
+}
+	
 /* How deep is blocknum in the tree of prevs? */
-static int proof_len(const struct path *prevs, size_t num_prevs, int blocknum)
+static int proof_len(const struct path *prevs, size_t num_prevs, int blocknum,
+		     size_t (*len_func)(const struct path *prevs,
+					size_t num_prevs, size_t to))
 {
 	size_t i;
 
 	/* Find this blocknum. */
 	for (i = 0; i < num_prevs; i++) {
 		if (prevs[i].blocknum == blocknum) {
-			int len = mmr_proof_len(num_prevs, i);
+			int len = len_func(prevs, num_prevs, i);
 			assert(len);
 			return len;
 		}
@@ -123,7 +231,9 @@ static int proof_len(const struct path *prevs, size_t num_prevs, int blocknum)
 
 /* make a copy of prevs from previous block, adding previous block in. */
 static struct path *append_prev(const struct block *prev, int prev_blocknum,
-				size_t *path_len)
+				size_t *path_len,
+				size_t (*len_func)(const struct path *prevs,
+						   size_t, size_t))
 {
 	struct path *prevs;
 
@@ -133,12 +243,14 @@ static struct path *append_prev(const struct block *prev, int prev_blocknum,
 	memcpy(prevs, prev->prevs, sizeof(*prevs) * (prev->prev_used+1));
 	prevs[prev->prev_used+1].blocknum = prev_blocknum;
 	prevs[prev->prev_used+1].num_hashes = prev->hashes_to_genesis
-		+ proof_len(prevs, *path_len, prev_blocknum);
+		+ proof_len(prevs, *path_len, prev_blocknum, len_func);
 
 	return prevs;
 }
 
-static void print_incremental_length(size_t num, size_t target, size_t seed)
+static void print_incremental_length(size_t num, size_t target, size_t seed,
+				     size_t (*len_func)(const struct path *,
+							size_t, size_t))
 {
 	struct block *blocks;
 	size_t i;
@@ -155,7 +267,8 @@ static void print_incremental_length(size_t num, size_t target, size_t seed)
 		/* Copy path into this block from previous block, adding
 		 * the prev block. */
 		blocks[i].prevs = append_prev(&blocks[i-1], i-1,
-					      &blocks[i].num_prevs);
+					      &blocks[i].num_prevs,
+					      len_func);
 
 		/* Free up old paths on blocks no longer on our path. */
 		for (j = blocks[i-1].prev_used + 1;
@@ -181,7 +294,8 @@ static void print_incremental_length(size_t num, size_t target, size_t seed)
 				continue;
 			/* How many hashes to get to this prev? */
 			plen = proof_len(blocks[i].prevs, blocks[i].num_prevs,
-					 blocks[i].prevs[j].blocknum);
+					 blocks[i].prevs[j].blocknum,
+					 len_func);
 			if (blocks[i].prevs[j].num_hashes + plen
 			    < best_distance) {
 				/* Use this one. */
@@ -202,7 +316,8 @@ static void print_incremental_length(size_t num, size_t target, size_t seed)
 	       blocks[num-1].num_prevs-1,
 	       blocks[num-1].prevs[blocks[num-1].prev_used].num_hashes
 		+ proof_len(blocks[num-1].prevs, blocks[num-1].num_prevs,
-			    blocks[num-1].prevs[blocks[num-1].prev_used].blocknum));
+			    blocks[num-1].prevs[blocks[num-1].prev_used].blocknum,
+			len_func));
 
 #if 0
 	for (i = num-1; i; i = blocks[i].prevs[blocks[i].prev_used].blocknum) {
@@ -226,9 +341,53 @@ static void print_incremental_length(size_t num, size_t target, size_t seed)
 #endif
 }
 
+static char *opt_set_breadth(size_t (**len_func)(const struct path *prevs,
+						 size_t to, size_t start))
+{
+	*len_func = breadth_proof_len;
+	return NULL;
+}
+
+static char *opt_set_rfc6962(size_t (**len_func)(const struct path *prevs,
+						 size_t to, size_t start))
+{
+	*len_func = rfc6962_proof_len;
+	return NULL;
+}
+
+static char *opt_set_rev_breadth(size_t (**len_func)(const struct path *prevs,
+						     size_t to, size_t start))
+{
+	*len_func = rev_breadth_proof_len;
+	return NULL;
+}
+
+static char *opt_set_rev_rfc6962(size_t (**len_func)(const struct path *prevs,
+						     size_t to, size_t start))
+{
+	*len_func = rev_rfc6962_proof_len;
+	return NULL;
+}
+
+static char *opt_set_huffman(size_t (**len_func)(const struct path *prevs,
+						 size_t to, size_t start))
+{
+	*len_func = huffman_proof_len;
+	return NULL;
+}
+
+static char *opt_set_naive(size_t (**len_func)(const struct path *prevs,
+					       size_t to, size_t start))
+{
+	*len_func = naive_proof_len;
+	return NULL;
+}
+
 int main(int argc, char *argv[])
 {
 	unsigned int num, seed = 0, target = 0;
+	size_t (*len_func)(const struct path *prevs, size_t num_prevs, size_t to)
+		= mmr_proof_len;
 
 	opt_register_noarg("--usage|--help|-h", opt_usage_and_exit,
 			   "<num>\n"
@@ -237,6 +396,18 @@ int main(int argc, char *argv[])
 			   "Print this message");
 	opt_register_arg("--target", opt_set_uintval, opt_show_uintval, &target,
 			 "Block number to terminate SPV proof at");
+	opt_register_noarg("--breadth", opt_set_breadth, &len_func,
+			 "Use breadth-first tree for path");
+	opt_register_noarg("--rfc6962", opt_set_rfc6962, &len_func,
+			 "Use RFC6962 tree for path");
+	opt_register_noarg("--rev-breadth", opt_set_rev_breadth, &len_func,
+			 "Use breadth-last tree for path");
+	opt_register_noarg("--rev-rfc6962", opt_set_rev_rfc6962, &len_func,
+			 "Use reversed RFC6962 tree for path");
+	opt_register_noarg("--huffman", opt_set_huffman, &len_func,
+			 "Use huffman tree for path");
+	opt_register_noarg("--naive", opt_set_naive, &len_func,
+			 "Use naive tree for path");
 	opt_register_arg("--seed", opt_set_uintval, opt_show_uintval, &seed,
 			 "Seed for deterministic RNG");
 
@@ -247,7 +418,7 @@ int main(int argc, char *argv[])
 	num = atoi(argv[1]);
 	if (target >= num)
 		errx(1, "Don't do that, you'll crash me");
-	print_incremental_length(num, target, seed);
+	print_incremental_length(num, target, seed, len_func);
 
 	return 0;
 }
